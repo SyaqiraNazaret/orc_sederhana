@@ -1,10 +1,12 @@
+// File: lib/screens/scan_screen.dart
+
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'result_screen.dart';
 
-// Variabel global, harus diinisialisasi sebelum digunakan pertama kali
+// Variabel global harus diinisialisasi oleh main.dart
 late List<CameraDescription> cameras;
 
 class ScanScreen extends StatefulWidget {
@@ -15,8 +17,9 @@ class ScanScreen extends StatefulWidget {
 }
 
 class _ScanScreenState extends State<ScanScreen> {
-  // Variabel 'late' yang akan diinisialisasi
+  // Variabel late
   late CameraController _controller;
+  // Future ini yang akan diamati oleh FutureBuilder
   late Future<void> _initializeControllerFuture;
 
   @override
@@ -25,36 +28,46 @@ class _ScanScreenState extends State<ScanScreen> {
     _initCamera();
   }
 
-  // >>>>>> PERBAIKAN KRITIS PADA _initCamera() <<<<<<
   void _initCamera() async {
     try {
-      // Dapatkan daftar kamera yang tersedia
+      // Menunggu daftar kamera tersedia
       cameras = await availableCameras();
 
-      // Pilih kamera pertama
+      // Inisialisasi controller
       _controller = CameraController(
         cameras[0],
         ResolutionPreset.medium,
       );
 
-      // Simpan Future inisialisasi controller
-      _initializeControllerFuture = _controller.initialize();
+      // Dapatkan Future dari inisialisasi kamera yang sebenarnya
+      Future<void> cameraInitialization = _controller.initialize();
+
+      // --- MODIFIKASI: GABUNGKAN INISIALISASI DENGAN DELAY BUATAN 3 DETIK ---
+      _initializeControllerFuture = Future.wait([
+        cameraInitialization, // 1. Tunggu inisialisasi kamera selesai
+        Future.delayed(const Duration(seconds: 3)), // 2. Tunggu delay buatan 3 detik
+      ]).then((_) => null); // Future selesai hanya setelah keduanya terpenuhi
+      // ----------------------------------------------------------------------
+
+      // setState dibutuhkan jika inisialisasi sukses setelah build pertama
+      if (mounted) {
+        setState(() {});
+      }
 
     } catch (e) {
       if (mounted) {
-        // Jika inisialisasi kamera gagal, tampilkan pesan dan pastikan Future diisi
-        // Ini MENCEGAH LateInitializationError di build()
+        // Jika inisialisasi gagal, Future diisi dengan error
+        _initializeControllerFuture = Future.error('Gagal inisialisasi kamera: $e');
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('ERROR KAMERA: $e. Cek izin kamera.')),
+          const SnackBar(content: Text('Error: Gagal mengakses kamera. Periksa izin.')),
         );
-        _initializeControllerFuture = Future.error('Gagal inisialisasi kamera');
       }
     }
   }
 
   @override
   void dispose() {
-    // Pastikan controller di-dispose hanya jika sudah diinisialisasi
+    // Dipanggil hanya jika controller berhasil diinisialisasi untuk mencegah error saat exit
     if (_controller.value.isInitialized) {
       _controller.dispose();
     }
@@ -72,7 +85,7 @@ class _ScanScreenState extends State<ScanScreen> {
 
   Future<void> _takePicture() async {
     try {
-      // Menunggu inisialisasi
+      // Menunggu kamera siap sebelum mengambil gambar
       await _initializeControllerFuture;
 
       if (!mounted || !_controller.value.isInitialized) return;
@@ -93,31 +106,50 @@ class _ScanScreenState extends State<ScanScreen> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Error saat mengambil/memproses foto: $e')));
+
+      // SOAL 2.2: Pesan error spesifik tanpa menampilkan detail error $e
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Pemindaian Gagal! Periksa Izin Kamera atau coba lagi.')
+          )
+      );
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    // FutureBuilder menunggu _initializeControllerFuture selesai
+    // FutureBuilder yang mencegah LateInitializationError
     return FutureBuilder<void>(
       future: _initializeControllerFuture,
       builder: (context, snapshot) {
-        // 1. Tampilkan loading
+
+        // SOAL 2.1: Custom Loading Screen (muncul saat waiting)
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
+          return Scaffold(
+            backgroundColor: Colors.grey[900], // Latar Belakang Custom
+            body: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: const [
+                  CircularProgressIndicator(color: Colors.yellow), // Indikator Custom
+                  SizedBox(height: 20),
+                  Text(
+                    'Memuat Kamera... Harap tunggu.', // Teks Custom
+                    style: TextStyle(color: Colors.white, fontSize: 18),
+                  ),
+                ],
+              ),
+            ),
           );
         }
 
-        // 2. Tampilkan error jika inisialisasi gagal
+        // Menangani error inisialisasi kamera (error izin, dll.)
         else if (snapshot.hasError) {
           return Scaffold(
             appBar: AppBar(title: const Text('Error Kamera')),
             body: Center(
               child: Text(
-                'Gagal memuat kamera: ${snapshot.error}',
+                'Gagal memuat kamera. Cek log konsol untuk detail atau pastikan izin kamera aktif.',
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: Colors.red, fontSize: 16),
               ),
@@ -125,7 +157,7 @@ class _ScanScreenState extends State<ScanScreen> {
           );
         }
 
-        // 3. Tampilkan CameraPreview
+        // Tampilkan CameraPreview setelah Future selesai (ready)
         else {
           return Scaffold(
             appBar: AppBar(title: const Text('Kamera OCR')),
